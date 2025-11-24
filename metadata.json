@@ -1,0 +1,8 @@
+{
+  "name": "NeoDelivery - Parceiro",
+  "description": "Uma versão moderna, limpa e intuitiva do aplicativo para entregadores, com foco em transparência financeira e gamificação de score.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
