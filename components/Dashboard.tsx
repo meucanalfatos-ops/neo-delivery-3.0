@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Power, MapPin, Navigation, Store, Bell, Bike, Volume2, Phone, MessageCircle, CreditCard, CheckCircle, Plus, Minus, Crosshair, Gem, Trophy, Award, Menu, RotateCcw, TrendingUp, Clock, Send, X, Map, AlertTriangle, HelpCircle, Timer, DollarSign, Package, Compass, Zap, ThumbsUp, User, ShieldAlert, CloudSun, Lock, XCircle, BarChart2, ShieldCheck, Smartphone } from 'lucide-react';
+import { Power, Navigation, Store, Bell, Bike, Volume2, Phone, MessageCircle, CreditCard, CheckCircle, Plus, Minus, Crosshair, Gem, Trophy, Award, Menu, RotateCcw, TrendingUp, Clock, Send, X, Map, AlertTriangle, HelpCircle, Timer, DollarSign, Package, Compass, Zap, ThumbsUp, User, ShieldAlert, CloudSun, Lock, XCircle, BarChart2, ShieldCheck, Smartphone, MapPin } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { generateSpeech } from '../services/geminiService';
 import { MOCK_STATS, MOCK_STORES, WEEKLY_DATA } from '../constants';
 import { DriverLevel, ChatMessage, View } from '../types';
+import GoogleMapIntegration from './GoogleMapIntegration';
 
 type OrderStep = 'idle' | 'offering' | 'going_to_store' | 'at_store' | 'delivering' | 'at_customer' | 'returning_machine' | 'completed';
 
@@ -29,20 +30,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
   const [arrivalTimer, setArrivalTimer] = useState(11 * 60);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [waitingForCustomer, setWaitingForCustomer] = useState(false);
-  const [waitTimer, setWaitTimer] = useState(600);
   const [isAccepting, setIsAccepting] = useState(false);
   const [showChart, setShowChart] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const ringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const [mapZoom, setMapZoom] = useState(1);
-  const [mapOffset, setMapOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [is3DMode, setIs3DMode] = useState(false);
-  const dragStart = useRef({ x: 0, y: 0 });
-  const initialOffset = useRef({ x: 0, y: 0 });
-  const [selectedPin, setSelectedPin] = useState<'store' | 'customer' | string | null>(null);
 
   const [showChat, setShowChat] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -59,33 +51,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
   const [dailyAccepted, setDailyAccepted] = useState(12);
   const [dailyRejected, setDailyRejected] = useState(2);
 
-  // Posições Fixas no Mapa Virtual (Pixels relativos ao centro 0,0)
-  const POS_DRIVER_START = { x: 0, y: 0 };
-  const POS_STORE = { x: -250, y: -250 };
-  const POS_CUSTOMER = { x: 250, y: 250 };
-
   // Simulação de Geolocalização do Entregador (Centro: Av. Paulista/Masp)
-  const driverLocation = { lat: -23.561684, lng: -46.655981 };
-  const MAP_SCALE = 25000; 
-
-  // Generate random "3D Buildings" for map immersion
-  const cityBuildings = useMemo(() => {
-    return Array.from({ length: 40 }).map((_, i) => ({
-        id: i,
-        left: (Math.random() * 3000) - 1500,
-        top: (Math.random() * 3000) - 1500,
-        width: 40 + Math.random() * 80,
-        height: 40 + Math.random() * 80,
-        depth: 50 + Math.random() * 150, 
-        color: Math.random() > 0.8 ? '#e5e7eb' : '#f3f4f6' // Light gray building style
-    }));
-  }, []);
-
-  const getPixelPosition = (targetLat: number, targetLng: number) => {
-     const x = (targetLng - driverLocation.lng) * MAP_SCALE;
-     const y = -(targetLat - driverLocation.lat) * MAP_SCALE; 
-     return { x, y };
-  };
+  const [driverLocation, setDriverLocation] = useState({ lat: -23.561684, lng: -46.655981 });
 
   const generateRandomOrder = () => {
     const rand = Math.random();
@@ -98,11 +65,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
     const randomStoreIndex = Math.floor(Math.random() * MOCK_STORES.length);
     const selectedRestaurant = MOCK_STORES[randomStoreIndex];
     
+    // Simulação de Destinos (com coordenadas próximas para o mapa funcionar)
     const possibleCustomers = [
-        { name: 'Juliana Martins', address: 'Rua Augusta, 1500' },
-        { name: 'Roberto Carlos', address: 'Al. Santos, 800' },
-        { name: 'Ana Pereira', address: 'Rua Frei Caneca, 300' },
-        { name: 'Marcos Souza', address: 'Rua da Consolação, 900' }
+        { name: 'Juliana Martins', address: 'Rua Augusta, 1500', lat: -23.5531, lng: -46.6587 },
+        { name: 'Roberto Carlos', address: 'Al. Santos, 800', lat: -23.5689, lng: -46.6521 },
+        { name: 'Ana Pereira', address: 'Rua Frei Caneca, 300', lat: -23.5528, lng: -46.6501 },
+        { name: 'Marcos Souza', address: 'Rua da Consolação, 900', lat: -23.5491, lng: -46.6452 }
     ];
     const shuffledCustomers = possibleCustomers.sort(() => 0.5 - Math.random());
 
@@ -153,7 +121,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
         paymentType: needsMachine ? 'machine_credit' : 'app',
         needsMachine,
         machineBonus,
-        isAppPayment: !needsMachine 
+        isAppPayment: !needsMachine,
+        // Coordinates for Map
+        storeLat: selectedRestaurant.lat || -23.563,
+        storeLng: selectedRestaurant.lng || -46.654,
+        customerLat: shuffledCustomers[0].lat,
+        customerLng: shuffledCustomers[0].lng
     };
   };
 
@@ -164,46 +137,23 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
     }
   }, []);
 
-  // --- CAMERA AND DRIVER POSITION LOGIC ---
+  // --- SIMULATED DRIVER MOVEMENT ---
   useEffect(() => {
-    if (isDragging) return; 
+    // Move driver slowly towards destination based on step
+    if (orderStep === 'idle' || orderStep === 'offering' || orderStep === 'completed') return;
 
-    let targetX = 0;
-    let targetY = 0;
-    let targetZoom = 1;
+    const interval = setInterval(() => {
+       setDriverLocation(prev => {
+          // Simple random movement jitter to simulate GPS update
+          return {
+             lat: prev.lat + (Math.random() - 0.5) * 0.0001,
+             lng: prev.lng + (Math.random() - 0.5) * 0.0001
+          };
+       });
+    }, 3000); // Reduced frequency for performance
 
-    // Lógica de Câmera: Seguir o Motorista
-    switch (orderStep) {
-        case 'idle':
-            targetX = 0; targetY = 0; targetZoom = 1;
-            break;
-        case 'going_to_store':
-            // Câmera tenta ficar entre o motorista e a loja
-            targetX = 125; targetY = 125; targetZoom = 0.8; 
-            break;
-        case 'at_store':
-            // Foca na loja
-            targetX = 250; targetY = 250; targetZoom = 1.6;
-            break;
-        case 'delivering':
-            // Motorista indo para cliente
-            targetX = 0; targetY = 0; targetZoom = 0.7;
-            break;
-        case 'at_customer':
-            // Foca no cliente
-            targetX = -250; targetY = -250; targetZoom = 1.6;
-            break;
-        case 'returning_machine':
-            targetX = 0; targetY = 0; targetZoom = 0.8;
-            break;
-        default:
-            targetX = 0; targetY = 0; targetZoom = 1;
-    }
-
-    setMapOffset({ x: targetX, y: targetY });
-    setMapZoom(targetZoom);
-
-  }, [orderStep, isDragging]);
+    return () => clearInterval(interval);
+  }, [orderStep]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -263,16 +213,16 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
 
   const playAnnouncer = () => {
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
-       // Padrão de vibração mais intenso e longo (estilo chamada)
-       navigator.vibrate([1000, 500, 1000, 500, 1000]); 
+       // Padrão de vibração profissional (3 pulsos distintos)
+       navigator.vibrate([500, 200, 500, 200, 500]); 
     }
     
-    // Voz da Marca
+    // Voz da Marca (Apenas "Neo.")
     window.speechSynthesis.cancel();
-    const simpleText = "Neo Delivery, Neo Delivery.";
+    const simpleText = "Neo.";
     const simpleUtterance = new SpeechSynthesisUtterance(simpleText);
     simpleUtterance.lang = 'pt-BR';
-    simpleUtterance.rate = 1.1;
+    simpleUtterance.rate = 1.2;
     simpleUtterance.pitch = 1.0;
     window.speechSynthesis.speak(simpleUtterance);
     
@@ -293,46 +243,29 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
 
     try {
        const now = ctx.currentTime;
-       // Efeito de "Ti-Li-Ling" Profissional (Tríade C6 - E6 - G6)
        
-       // Nota 1 (C6 ~ 1046Hz)
+       // "Ti-ling" Effect (2 Crystal Tones)
        const osc1 = ctx.createOscillator();
        const gain1 = ctx.createGain();
        osc1.type = 'sine'; 
-       osc1.frequency.setValueAtTime(1046, now);
-       gain1.gain.setValueAtTime(0.1, now);
-       gain1.gain.exponentialRampToValueAtTime(0.5, now + 0.05);
-       gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+       osc1.frequency.setValueAtTime(987, now);
+       gain1.gain.setValueAtTime(0.15, now);
+       gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
        osc1.connect(gain1);
        gain1.connect(ctx.destination);
        osc1.start(now);
-       osc1.stop(now + 0.25);
+       osc1.stop(now + 0.2);
 
-       // Nota 2 (E6 ~ 1318Hz)
        const osc2 = ctx.createOscillator();
        const gain2 = ctx.createGain();
        osc2.type = 'sine'; 
        osc2.frequency.setValueAtTime(1318, now + 0.15);
-       gain2.gain.setValueAtTime(0.1, now + 0.15);
-       gain2.gain.exponentialRampToValueAtTime(0.5, now + 0.2);
-       gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+       gain2.gain.setValueAtTime(0.15, now + 0.15);
+       gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
        osc2.connect(gain2);
        gain2.connect(ctx.destination);
        osc2.start(now + 0.15);
-       osc2.stop(now + 0.45);
-
-       // Nota 3 (G6 ~ 1568Hz) - Longa
-       const osc3 = ctx.createOscillator();
-       const gain3 = ctx.createGain();
-       osc3.type = 'triangle'; // Triangle para cortar o som ambiente
-       osc3.frequency.setValueAtTime(1568, now + 0.30);
-       gain3.gain.setValueAtTime(0.1, now + 0.30);
-       gain3.gain.exponentialRampToValueAtTime(0.6, now + 0.35);
-       gain3.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
-       osc3.connect(gain3);
-       gain3.connect(ctx.destination);
-       osc3.start(now + 0.30);
-       osc3.stop(now + 1.5);
+       osc2.stop(now + 0.6);
 
     } catch(e) { console.error(e); }
   };
@@ -387,24 +320,23 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
       setIsAccepting(false);
       setArrivalTimer(11 * 60);
       setOrderStep('going_to_store');
-      setIs3DMode(true);
-      if (mockOrder) openGoogleMaps(mockOrder.restaurantAddress);
-    }, 1500); // Reduzido para 1.5s para sensação mais ágil
+      // Auto-navigate to store on accept
+      if (mockOrder && mockOrder.restaurantAddress) {
+         openGoogleMaps(mockOrder.restaurantAddress);
+      }
+    }, 1500); 
   };
 
   const handleArrivedAtStore = () => {
     setOrderStep('at_store');
-    setIs3DMode(false);
   };
 
   const handleCollected = () => {
     setOrderStep('delivering');
-    setIs3DMode(true); 
   };
 
   const handleArrivedAtCustomer = () => {
     setOrderStep('at_customer');
-    setIs3DMode(false);
   };
 
   const completeDelivery = () => {
@@ -444,7 +376,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
     setTimeout(() => {
        setMockOrder(null); // Clear order to trigger regeneration in loop
        setOrderStep('idle');
-       setIs3DMode(false);
     }, 4000);
   };
 
@@ -488,31 +419,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
     }, 2500);
   };
 
-  const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
-    setIsDragging(true);
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
-    dragStart.current = { x: clientX, y: clientY };
-    initialOffset.current = { ...mapOffset };
-  };
-
-  const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDragging) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
-    const dx = clientX - dragStart.current.x;
-    const dy = clientY - dragStart.current.y;
-    setMapOffset({ x: initialOffset.current.x + dx, y: initialOffset.current.y + dy });
-  };
-
-  const handleMouseUp = () => setIsDragging(false);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    const zoomSensitivity = 0.001;
-    const newZoom = mapZoom + (e.deltaY * -zoomSensitivity);
-    setMapZoom(Math.min(Math.max(0.5, newZoom), 3));
-  };
-
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -525,196 +431,126 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenSidebar, onNavigate }) => {
   const earningsPerKmFormatted = earningsPerKm.toFixed(2).replace('.', ',');
   const isHighPay = earningsPerKm > 2.0;
 
+  // Prepare Locations for Map
+  const pickupLoc = mockOrder ? { lat: mockOrder.storeLat, lng: mockOrder.storeLng } : null;
+  const destLoc = mockOrder ? { lat: mockOrder.customerLat, lng: mockOrder.customerLng } : null;
+
   return (
     <div className="relative h-screen bg-gray-100 overflow-hidden flex flex-col font-sans">
       
-      {/* BACKGROUND MAP LAYER */}
-      <div 
-        className={`absolute inset-0 z-0 transition-all duration-1000 ${is3DMode ? 'perspective-[1000px]' : ''}`}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onTouchStart={handleMouseDown}
-        onTouchMove={handleMouseMove}
-        onTouchEnd={handleMouseUp}
-        onWheel={handleWheel}
-      >
-         <div 
-            className="absolute inset-0 transition-transform duration-1000 ease-in-out bg-[#e5e7eb]"
-            style={{ 
-               transform: `translate(${mapOffset.x}px, ${mapOffset.y}px) scale(${mapZoom}) ${is3DMode ? 'rotateX(45deg)' : 'rotateX(0deg)'}`,
-               transformOrigin: 'center center',
-               backgroundImage: 'linear-gradient(#d1d5db 2px, transparent 2px), linear-gradient(90deg, #d1d5db 2px, transparent 2px)',
-               backgroundSize: '100px 100px'
-            }}
-         >
-            {/* 3D Buildings */}
-            {is3DMode && cityBuildings.map((b) => (
-               <div 
-                  key={b.id}
-                  className="absolute transition-opacity duration-500"
-                  style={{
-                     left: `calc(50% + ${b.left}px)`,
-                     top: `calc(50% + ${b.top}px)`,
-                     width: `${b.width}px`,
-                     height: `${b.height}px`,
-                     backgroundColor: b.color,
-                     boxShadow: '-10px 10px 20px rgba(0,0,0,0.2)',
-                     transform: `translateZ(${b.depth}px)`, // Simula altura
-                     opacity: mapZoom > 0.8 ? 1 : 0
-                  }}
-               ></div>
-            ))}
-
-            {/* Driver Pin (Always Center relative to map logic) */}
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 flex flex-col items-center transition-all duration-[2000ms]">
-                <div className="relative">
-                   {/* Headlight beam in 3D mode */}
-                   {is3DMode && <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-32 h-32 bg-yellow-400/20 blur-xl rounded-full clip-path-triangle"></div>}
-                   <div className="w-4 h-4 bg-blue-500 rounded-full ring-4 ring-white shadow-xl z-20 relative"></div>
-                   <div className="w-12 h-12 bg-blue-500/20 rounded-full absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-ping"></div>
-                </div>
-            </div>
-
-            {/* Store Pin */}
-            <div 
-               className="absolute flex flex-col items-center cursor-pointer group z-10"
-               style={{ 
-                  left: `calc(50% + ${POS_STORE.x}px)`, 
-                  top: `calc(50% + ${POS_STORE.y}px)` 
-               }}
-               onClick={(e) => { e.stopPropagation(); setSelectedPin('store'); }}
-            >
-               <div className={`p-2 bg-white rounded-full shadow-lg transform transition-transform group-hover:scale-110 border-2 ${selectedPin === 'store' ? 'border-blue-600 scale-125' : 'border-gray-800'}`}>
-                  <Store size={24} className="text-gray-800" />
-               </div>
-               {selectedPin === 'store' && (
-                  <div className="absolute bottom-12 bg-white p-3 rounded-xl shadow-2xl min-w-[160px] animate-fade-in z-50">
-                     <p className="font-bold text-sm text-gray-900">{mockOrder?.restaurant || "Restaurante"}</p>
-                     <p className="text-xs text-gray-500 mb-2">{mockOrder?.restaurantAddress}</p>
-                     <div className="flex gap-2">
-                        <button onClick={() => openGoogleMaps(mockOrder?.restaurantAddress || "")} className="flex-1 bg-blue-50 text-blue-600 p-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"><Map size={12}/> Maps</button>
-                        <button onClick={() => openWaze(mockOrder?.restaurantAddress || "")} className="flex-1 bg-blue-50 text-blue-600 p-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"><Navigation size={12}/> Waze</button>
-                     </div>
-                  </div>
-               )}
-            </div>
-
-            {/* Customer Pin */}
-            <div 
-               className="absolute flex flex-col items-center cursor-pointer group z-10"
-               style={{ 
-                  left: `calc(50% + ${POS_CUSTOMER.x}px)`, 
-                  top: `calc(50% + ${POS_CUSTOMER.y}px)` 
-               }}
-               onClick={(e) => { e.stopPropagation(); setSelectedPin('customer'); }}
-            >
-               <div className={`p-2 bg-[#EA1D2C] rounded-full shadow-lg transform transition-transform group-hover:scale-110 border-2 ${selectedPin === 'customer' ? 'border-white ring-2 ring-red-500 scale-125' : 'border-white'}`}>
-                  <User size={24} className="text-white" />
-               </div>
-               {selectedPin === 'customer' && (
-                  <div className="absolute bottom-12 bg-white p-3 rounded-xl shadow-2xl min-w-[160px] animate-fade-in z-50">
-                     <p className="font-bold text-sm text-gray-900">{mockOrder?.customerName || "Cliente"}</p>
-                     <p className="text-xs text-gray-500 mb-2">{mockOrder?.customerAddress}</p>
-                     <div className="flex gap-2">
-                        <button onClick={() => openGoogleMaps(mockOrder?.customerAddress || "")} className="flex-1 bg-red-50 text-red-600 p-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"><Map size={12}/> Maps</button>
-                        <button onClick={() => openWaze(mockOrder?.customerAddress || "")} className="flex-1 bg-red-50 text-red-600 p-1.5 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"><Navigation size={12}/> Waze</button>
-                     </div>
-                  </div>
-               )}
-            </div>
-
-            {/* Route Lines */}
-            <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
-               <defs>
-                  <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
-                     <path d="M 0 0 L 10 5 L 0 10 z" fill="#3B82F6" />
-                  </marker>
-               </defs>
-               
-               {/* Path to Store */}
-               {(orderStep === 'going_to_store') && (
-                  <line 
-                     x1={`calc(50% + ${POS_DRIVER_START.x}px)`} y1={`calc(50% + ${POS_DRIVER_START.y}px)`} 
-                     x2={`calc(50% + ${POS_STORE.x}px)`} y2={`calc(50% + ${POS_STORE.y}px)`} 
-                     stroke="#3B82F6" strokeWidth="4" strokeDasharray="10 10" markerEnd="url(#arrow)" 
-                     className="animate-dash"
-                  />
-               )}
-
-               {/* Path to Customer */}
-               {(orderStep === 'delivering') && (
-                  <line 
-                     x1={`calc(50% + ${POS_STORE.x}px)`} y1={`calc(50% + ${POS_STORE.y}px)`} 
-                     x2={`calc(50% + ${POS_CUSTOMER.x}px)`} y2={`calc(50% + ${POS_CUSTOMER.y}px)`} 
-                     stroke="#EA1D2C" strokeWidth="4" strokeLinecap="round" 
-                  />
-               )}
-            </svg>
-         </div>
-         
-         {/* Gradient Overlay for Depth */}
-         <div className="absolute inset-0 bg-gradient-to-b from-gray-100/50 via-transparent to-gray-100/50 pointer-events-none"></div>
-      </div>
+      {/* REAL GOOGLE MAP LAYER */}
+      <GoogleMapIntegration 
+         driverLocation={driverLocation}
+         pickupLocation={pickupLoc}
+         destination={destLoc}
+         status={orderStep}
+      />
 
       {/* TOP GRADIENT (Header Background) */}
       <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-black/60 to-transparent pointer-events-none z-30"></div>
 
       {/* --- OFFERING OVERLAY --- */}
       {orderStep === 'offering' && !isAccepting && mockOrder && (
-         <div className="fixed inset-0 z-[100] bg-gray-900/95 backdrop-blur-md flex flex-col animate-fade-in">
-            <div className="w-full h-2 bg-gray-800">
-               <div className="h-full bg-[#EA1D2C] transition-all duration-1000 ease-linear" style={{ width: `${(offerTimer / 15) * 100}%` }}></div>
+         <div className="fixed inset-0 z-[100] bg-gray-900/95 backdrop-blur-md flex flex-col animate-fade-in font-sans">
+            {/* Timer Bar */}
+            <div className="w-full h-1.5 bg-gray-800">
+               <div className="h-full bg-green-500 shadow-[0_0_10px_#22c55e] transition-all duration-1000 ease-linear" style={{ width: `${(offerTimer / 15) * 100}%` }}></div>
             </div>
-            <div className="absolute top-6 left-1/2 transform -translate-x-1/2 text-center animate-pulse">
-               <h2 className="text-3xl font-black text-white tracking-tighter italic">NEO</h2>
+
+            {/* Header Title */}
+            <div className="absolute top-8 left-0 right-0 text-center z-20 pointer-events-none">
+               <h2 className="text-4xl font-black text-white tracking-tighter italic drop-shadow-lg animate-pulse">
+                  NEO<span className="text-[#EA1D2C]">.</span>
+               </h2>
+               <p className="text-xs font-bold text-gray-400 uppercase tracking-[0.3em] mt-1">Nova Oferta</p>
             </div>
             
-            {/* Card Info */}
-            <div className="flex-1 flex flex-col justify-end p-6 pb-10">
-               <div className="bg-gray-800 rounded-3xl p-6 border border-gray-700 shadow-2xl mb-4">
-                  <div className="flex justify-between items-start mb-6">
-                     <div>
-                        <div className="flex items-center gap-2 mb-1">
-                           {mockOrder.isGrouped && <span className="text-[10px] bg-purple-600 text-white px-2 py-0.5 rounded font-bold uppercase">Rota {mockOrder.orderCount > 2 ? 'Tripla' : 'Dupla'}</span>}
-                           {isHighPay && <span className="text-[10px] bg-green-500 text-black px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1"><Gem size={10}/> Super Oferta</span>}
-                        </div>
-                        <h2 className="text-5xl font-black text-white tracking-tighter flex items-center gap-3">
-                           {mockOrder.fee}
-                           {mockOrder.machineBonus > 0 && <span className="text-sm bg-green-900 text-green-400 px-2 py-1 rounded-lg font-bold border border-green-700">+ R$ 2,00</span>}
-                        </h2>
-                        <p className="text-gray-400 text-sm font-medium mt-1">{mockOrder.restaurant} • {mockOrder.paymentMethod}</p>
+            {/* Route Preview */}
+            <div className="flex-1 relative w-full overflow-hidden">
+               {/* Abstract Map Background for Offer */}
+               <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(#374151 1px, transparent 1px), linear-gradient(90deg, #374151 1px, transparent 1px)', backgroundSize: '40px 40px' }}></div>
+               
+               <div className="absolute inset-0 flex items-center justify-center scale-125">
+                  <svg className="w-full h-full" viewBox="0 0 400 400">
+                     <defs>
+                        <filter id="glow">
+                           <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+                           <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                        </filter>
+                     </defs>
+                     <path d="M 120 280 Q 200 100 280 120" fill="none" stroke="#22c55e" strokeWidth="4" strokeLinecap="round" strokeDasharray="10 10" className="animate-dash" filter="url(#glow)" />
+                     <circle cx="120" cy="280" r="8" fill="#3B82F6" className="animate-ping" />
+                     <circle cx="120" cy="280" r="5" fill="white" />
+                     <circle cx="280" cy="120" r="8" fill="#EA1D2C" className="animate-pulse" />
+                     <circle cx="280" cy="120" r="5" fill="white" />
+                  </svg>
+               </div>
+
+               <div className="absolute bottom-[30%] left-[10%] bg-gray-900/90 backdrop-blur border border-gray-700 px-3 py-1.5 rounded-xl shadow-xl flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                  <span className="text-xs font-bold text-white">{mockOrder.restaurant.substring(0, 15)}</span>
+               </div>
+               <div className="absolute top-[25%] right-[10%] bg-gray-900/90 backdrop-blur border border-gray-700 px-3 py-1.5 rounded-xl shadow-xl flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                  <span className="text-xs font-bold text-white">Cliente</span>
+               </div>
+            </div>
+            
+            {/* Offer Details Card */}
+            <div className="bg-gray-900 border-t border-gray-800 rounded-t-3xl p-6 pb-8 shadow-[0_-10px_40px_rgba(0,0,0,0.5)] relative z-30">
+               <div className="w-12 h-1 bg-gray-700 rounded-full mx-auto mb-6"></div>
+
+               <div className="flex justify-between items-start mb-6">
+                  <div>
+                     <div className="flex items-center gap-2 mb-2">
+                        {mockOrder.isGrouped && <span className="text-[10px] bg-purple-600 text-white px-2 py-0.5 rounded font-bold uppercase shadow-lg shadow-purple-900/50">Rota {mockOrder.orderCount > 2 ? 'Tripla' : 'Dupla'}</span>}
+                        {isHighPay && <span className="text-[10px] bg-green-500 text-black px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1 shadow-lg shadow-green-900/50"><Gem size={10}/> Super Oferta</span>}
                      </div>
-                     <div className="text-right">
-                        <div className="text-3xl font-bold text-gray-300">{mockOrder.distance}</div>
-                        <div className="text-xs text-gray-500 uppercase font-bold">Total Percorrido</div>
+                     <h2 className="text-6xl font-black text-white tracking-tighter flex items-center gap-3">
+                        {mockOrder.fee}
+                     </h2>
+                     <div className="flex items-center gap-2 mt-2">
+                        {mockOrder.machineBonus > 0 && <span className="text-[10px] bg-green-900/50 text-green-400 px-2 py-1 rounded border border-green-800 font-bold uppercase">+ R$ 2,00 Maquininha</span>}
+                        <span className="text-sm text-gray-400 font-medium">{mockOrder.paymentMethod}</span>
+                     </div>
+                  </div>
+                  
+                  <div className="text-right">
+                     <div className="flex flex-col items-end">
+                        <span className="text-3xl font-bold text-white">{mockOrder.distance}</span>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Distância Total</span>
+                     </div>
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-3 gap-3 mb-6">
+                  <div className="bg-gray-800 p-3 rounded-2xl text-center border border-gray-700 flex flex-col justify-center">
+                     <Clock size={18} className="text-gray-500 mx-auto mb-1" />
+                     <p className="text-lg font-bold text-white">{mockOrder.estimatedTime}</p>
+                  </div>
+                  
+                  {/* Highlighted Earnings per KM */}
+                  <div className="bg-green-900 p-3 rounded-2xl text-center border-2 border-green-500 shadow-[0_0_20px_rgba(34,197,94,0.4)] transform scale-110 z-10 flex flex-col justify-center relative overflow-hidden">
+                     <div className="absolute inset-0 bg-gradient-to-t from-green-900 to-green-800 opacity-50"></div>
+                     <div className="relative z-10">
+                        <p className="text-[10px] text-green-300 uppercase font-black tracking-wide mb-0.5">R$ / KM</p>
+                        <p className="text-xl font-black text-white drop-shadow-sm">R$ {earningsPerKmFormatted}</p>
                      </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3 mb-8">
-                     <div className="bg-gray-900 p-3 rounded-xl text-center border border-gray-700">
-                        <p className="text-[10px] text-gray-400 uppercase font-bold">Tempo Est.</p>
-                        <p className="text-lg font-bold text-white">{mockOrder.estimatedTime}</p>
-                     </div>
-                     <div className="bg-green-900 p-3 rounded-xl text-center border-2 border-green-400 shadow-[0_0_30px_rgba(74,222,128,0.6)] transform scale-105 z-10">
-                        <p className="text-[10px] text-green-300 uppercase font-bold">Ganho / KM</p>
-                        <p className="text-xl font-black text-white drop-shadow-md">R$ {earningsPerKmFormatted}</p>
-                     </div>
-                     <div className="bg-gray-900 p-3 rounded-xl text-center border border-gray-700">
-                        <p className="text-[10px] text-gray-400 uppercase font-bold">Destino</p>
-                        <p className="text-xs font-bold text-white truncate">{mockOrder.customerAddress.split(',')[0]}</p>
-                     </div>
+                  <div className="bg-gray-800 p-3 rounded-2xl text-center border border-gray-700 flex flex-col justify-center">
+                     <MapPin size={18} className="text-gray-500 mx-auto mb-1" />
+                     <p className="text-xs font-bold text-white truncate max-w-full">{mockOrder.customerAddress.split(',')[0]}</p>
                   </div>
+               </div>
 
-                  <div className="flex gap-4">
-                     <button onClick={rejectOrder} className="flex-1 py-4 rounded-2xl font-bold text-white bg-gray-900 border border-gray-700 hover:bg-gray-700 transition-all flex items-center justify-center gap-2">
-                        <X size={24} className="text-red-500" /> Recusar
-                     </button>
-                     <button onClick={acceptOrder} className="flex-[2] py-4 rounded-2xl font-black text-white bg-[#EA1D2C] hover:bg-red-600 shadow-lg shadow-red-900/50 transition-all flex items-center justify-center gap-2 text-xl transform active:scale-95">
-                        Aceitar entrega
-                     </button>
-                  </div>
+               <div className="flex gap-4 h-14">
+                  <button onClick={rejectOrder} className="h-full aspect-square rounded-2xl font-bold text-white bg-gray-800 border border-gray-700 hover:bg-gray-700 active:scale-95 transition-all flex items-center justify-center">
+                     <X size={28} className="text-red-500" />
+                  </button>
+                  <button onClick={acceptOrder} className="flex-1 h-full rounded-2xl font-black text-xl text-white bg-[#EA1D2C] hover:bg-red-600 active:scale-95 shadow-[0_0_30px_rgba(234,29,44,0.4)] transition-all flex items-center justify-center gap-2">
+                     ACEITAR CORRIDA
+                  </button>
                </div>
             </div>
          </div>

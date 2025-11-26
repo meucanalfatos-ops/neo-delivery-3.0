@@ -1,0 +1,73 @@
+import React, { useEffect, useRef } from 'react';
+
+interface GoogleMapProps {
+  center?: { lat: number; lng: number };
+  zoom?: number;
+}
+
+// Extensão da interface Window para suportar a função de callback do Google Maps
+declare global {
+  interface Window {
+    initMap?: () => void;
+    google?: any;
+  }
+}
+
+const GoogleMapIntegration: React.FC<GoogleMapProps> = ({ 
+  center = { lat: -23.5505, lng: -46.6333 }, 
+  zoom = 14 
+}) => {
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<any>(null);
+
+  useEffect(() => {
+    // Função que inicializa o mapa
+    const initializeMap = () => {
+      if (mapRef.current && window.google) {
+        mapInstanceRef.current = new window.google.maps.Map(mapRef.current, {
+          zoom: zoom,
+          center: center,
+          mapId: 'NEO_MAP_ID', // Opcional: ID do mapa para estilização na nuvem Google
+          disableDefaultUI: false,
+        });
+
+        new window.google.maps.Marker({
+          position: center,
+          map: mapInstanceRef.current,
+          title: "Minha Localização",
+        });
+      }
+    };
+
+    // Lógica para carregar o script apenas uma vez
+    if (!window.google) {
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyCeu8MoUya1C8_CAsDSUZrmW4qkZ2jf2SQ&callback=initMap`;
+      script.async = true;
+      script.defer = true;
+      
+      // Define o callback global que a API chama quando carrega
+      window.initMap = initializeMap;
+      
+      document.body.appendChild(script);
+    } else {
+      // Se a API já estiver carregada, inicia direto
+      initializeMap();
+    }
+
+    // Cleanup: Remove o callback global se o componente desmontar
+    return () => {
+      // window.initMap = undefined; // Opcional
+    };
+  }, [center, zoom]);
+
+  return (
+    <div 
+      ref={mapRef} 
+      style={{ width: '100%', height: '500px', borderRadius: '16px' }} 
+      className="shadow-lg border border-gray-200"
+    />
+  );
+};
+
+export default GoogleMapIntegration;
